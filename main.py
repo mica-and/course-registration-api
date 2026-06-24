@@ -4,22 +4,29 @@ import re
 
 app = FastAPI()
 
-# in-memory DB
 courses = {}
 
 def get_text(tag):
     return tag.get_text(" ", strip=True) if tag else None
 
+def normalize_course_code(code: str):
+    if not code:
+        return None
+    return re.sub(r"\s+", "", code.upper())
+
 def extract_course_codes(text: str):
     if not text:
         return []
-    return re.findall(r"[A-Z]{4}\s*\d{4}", text.upper())
+
+    matches = re.findall(r"[A-Z]{4}\s*\d{4}", text.upper())
+    return [normalize_course_code(m) for m in matches]
 
 def parse_prerequisites(text: str):
     return extract_course_codes(text)
 
 def parse_schedule(row):
     schedule_block = row.select_one(".schedule")
+
     if not schedule_block:
         return {
             "days": [],
@@ -35,57 +42,78 @@ def parse_schedule(row):
         "time": get_text(schedule_block.select_one(".time")),
         "room": get_text(schedule_block.select_one(".room"))
     }
-    
+
 @app.post("/api/v1/admin/catalog/import")
 def import_catalog(file: UploadFile = File(...)):
     html = file.file.read()
-    soup = BeautifulSoup(html.decode("utf-8", errors="ignore"), "html.parser")
+    soup = BeautifulSoup(
+        html.decode("utf-8", errors="ignore"),
+        "html.parser"
+    )
+
+    imported = 0
 
     for row in soup.select("tr.course"):
 
-        # ----------------------------
-        # CORE FIELDS (structure-based)
-        # ----------------------------
-        course_code = get_text(row.select_one(".course_code"))
-        title = get_text(row.select_one(".course_title"))
+        raw_course_code = get_text(
+            row.select_one(".course_code")
+        )
 
-        credits_raw = get_text(row.select_one(".credits"))
-        credits_match = re.search(r"\d+", credits_raw or "")
-        credits = int(credits_match.group()) if credits_match else None
+        title = get_text(
+            row.select_one(".course_title")
+        )
 
-        # Skip invalid rows safely
-        if not course_code or not title:
+        credits_raw = get_text(
+            row.select_one(".credits")
+        )
+
+        credits_match = re.search(
+            r"\d+",
+            credits_raw or ""
+        )
+
+        credits = (
+            int(credits_match.group())
+            if credits_match
+            else None
+        )
+
+        if not raw_course_code or not title:
             continue
 
-        # ----------------------------
-        # EXTRA FIELDS (optional)
-        # ----------------------------
-        description = get_text(row.select_one(".description"))
-        department = get_text(row.select_one(".department"))
-        instructor = get_text(row.select_one(".instructor"))
+        course_code = normalize_course_code(
+            raw_course_code
+        )
 
-        # ----------------------------
-        # PREREQUISITES (flexible text → structured list)
-        # ----------------------------
-        prereq_text = get_text(row.select_one(".prerequisites"))
-        prerequisites = parse_prerequisites(prereq_text)
+        description = get_text(
+            row.select_one(".description")
+        )
 
-        # ----------------------------
-        # CROSS-LISTED COURSES
-        # ----------------------------
+        department = get_text(
+            row.select_one(".department")
+        )
+
+        instructor = get_text(
+            row.select_one(".instructor")
+        )
+
+        prereq_text = get_text(
+            row.select_one(".prerequisites")
+        )
+
+        prerequisites = parse_prerequisites(
+            prereq_text
+        )
+
         cross_listed = [
-            c.get_text(strip=True)
+            normalize_course_code(
+                c.get_text(strip=True)
+            )
             for c in row.select(".course-listed")
         ]
 
-        # ----------------------------
-        # SCHEDULE (nested structure)
-        # ----------------------------
         schedule = parse_schedule(row)
 
-        # ----------------------------
-        # STORE NORMALIZED RECORD
-        # ----------------------------
         courses[course_code] = {
             "course_code": course_code,
             "title": title,
@@ -98,16 +126,35 @@ def import_catalog(file: UploadFile = File(...)):
             "schedule": schedule
         }
 
+        imported += 1
+
     return {
         "status": "success",
-        "imported": len(courses)
+        "imported": imported
     }
-    
+
 @app.get("/api/v1/catalog/courses/{course_code}")
 def get_course(course_code: str):
-    course = courses.get(course_code)
+    normalized_code = normalize_course_code(
+        course_code
+    )
+
+    course = courses.get(normalized_code)
 
     if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Course not found"
+        )
 
     return course
+
+@app.get("/")
+def root():
+    return {"status": "running"}
+
+@app.get("/debug")
+def debug():
+    return {
+        "stored_course_codes": list(courses.keys())
+    }

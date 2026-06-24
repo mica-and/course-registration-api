@@ -1,6 +1,0 @@
-api_url.txt
-Course Catalog.html
-main.py
-requirements.txt
-test.txt
-venv
