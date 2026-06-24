@@ -1,160 +1,161 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
+from pydantic import BaseModel
 from bs4 import BeautifulSoup
-import re
+from typing import List, Dict
 
 app = FastAPI()
 
-courses = {}
+# ---------------------------
+# In-memory storage (IMPORTANT)
+# ---------------------------
+students = {}
 
-def get_text(tag):
-    return tag.get_text(" ", strip=True) if tag else None
+# ---------------------------
+# Models
+# ---------------------------
+class Course(BaseModel):
+    course_code: str
+    term: str
+    credits_earned: int = 0
+    status: str
 
-def normalize_course_code(code: str):
-    if not code:
-        return None
-    return re.sub(r"\s+", "", code.upper())
+class PlanCourse(BaseModel):
+    course_code: str
+    term: str
 
-def extract_course_codes(text: str):
-    if not text:
-        return []
+class Plan(BaseModel):
+    planned_courses: List[PlanCourse]
 
-    matches = re.findall(r"[A-Z]{4}\s*\d{4}", text.upper())
-    return [normalize_course_code(m) for m in matches]
+# ---------------------------
+# Helper: ensure student exists
+# ---------------------------
+def get_student(student_id: str):
+    if student_id not in students:
+        raise HTTPException(status_code=404, detail="Student not found")
+    return students[student_id]
 
-def parse_prerequisites(text: str):
-    return extract_course_codes(text)
+# ---------------------------
+# HTML PARSER (CORE REQUIREMENT)
+# ---------------------------
+def parse_transcript(html: str):
+    soup = BeautifulSoup(html, "html.parser")
 
-def parse_schedule(row):
-    schedule_block = row.select_one(".schedule")
+    rows = soup.find_all("tr")
 
-    if not schedule_block:
-        return {
-            "days": [],
-            "time": None,
-            "room": None
-        }
+    history = []
 
-    return {
-        "days": [
-            d.get_text(strip=True)
-            for d in schedule_block.select(".day")
-        ],
-        "time": get_text(schedule_block.select_one(".time")),
-        "room": get_text(schedule_block.select_one(".room"))
-    }
+    for row in rows:
+        cols = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
 
-@app.post("/api/v1/admin/catalog/import")
-def import_catalog(file: UploadFile = File(...)):
-    html = file.file.read()
-    soup = BeautifulSoup(
-        html.decode("utf-8", errors="ignore"),
-        "html.parser"
-    )
-
-    imported = 0
-
-    for row in soup.select("tr.course"):
-
-        raw_course_code = get_text(
-            row.select_one(".course_code")
-        )
-
-        title = get_text(
-            row.select_one(".course_title")
-        )
-
-        credits_raw = get_text(
-            row.select_one(".credits")
-        )
-
-        credits_match = re.search(
-            r"\d+",
-            credits_raw or ""
-        )
-
-        credits = (
-            int(credits_match.group())
-            if credits_match
-            else None
-        )
-
-        if not raw_course_code or not title:
+        if len(cols) < 5:
             continue
 
-        course_code = normalize_course_code(
-            raw_course_code
-        )
+        status, course, _, _, term, *rest = cols
 
-        description = get_text(
-            row.select_one(".description")
-        )
+        if status not in ["Completed", "In-Progress", "Attempted"]:
+            continue
 
-        department = get_text(
-            row.select_one(".department")
-        )
+        if not term:
+            continue
 
-        instructor = get_text(
-            row.select_one(".instructor")
-        )
+        credits = 0
+        if rest:
+            try:
+                credits = int(rest[-1]) if rest[-1].isdigit() else 0
+            except:
+                credits = 0
 
-        prereq_text = get_text(
-            row.select_one(".prerequisites")
-        )
+        history.append({
+            "course_code": course,
+            "term": term,
+            "credits_earned": credits,
+            "status": status
+        })
 
-        prerequisites = parse_prerequisites(
-            prereq_text
-        )
+    # Deduplicate (course_code, term)
+    dedup = {}
+    for h in history:
+        key = (h["course_code"], h["term"])
+        if key not in dedup:
+            dedup[key] = h
+        else:
+            # keep higher credits
+            if h["credits_earned"] > dedup[key]["credits_earned"]:
+                dedup[key] = h
 
-        cross_listed = [
-            normalize_course_code(
-                c.get_text(strip=True)
-            )
-            for c in row.select(".course-listed")
-        ]
+    return list(dedup.values())
 
-        schedule = parse_schedule(row)
+# ---------------------------
+# HISTORY ENDPOINTS
+# ---------------------------
 
-        courses[course_code] = {
-            "course_code": course_code,
-            "title": title,
-            "description": description,
-            "credits": credits,
-            "department": department,
-            "instructor": instructor,
-            "prerequisites": prerequisites,
-            "cross_listed": cross_listed,
-            "schedule": schedule
-        }
+@app.post("/api/v1/students/{student_id}/history/import")
+async def import_history(student_id: str, file: UploadFile = File(...)):
+    html = await file.read()
+    parsed = parse_transcript(html.decode("utf-8"))
 
-        imported += 1
+    students.setdefault(student_id, {})
+    students[student_id]["history"] = parsed
+    students[student_id].setdefault("plan", [])
 
     return {
         "status": "success",
-        "imported": imported
+        "past_courses_imported": len(parsed)
     }
 
-@app.get("/api/v1/catalog/courses/{course_code}")
-def get_course(course_code: str):
-    normalized_code = normalize_course_code(
-        course_code
-    )
 
-    course = courses.get(normalized_code)
+@app.put("/api/v1/students/{student_id}/history")
+def update_history(student_id: str, payload: Dict):
+    student = get_student(student_id)
+    student["history"] = payload["history"]
 
-    if not course:
-        raise HTTPException(
-            status_code=404,
-            detail="Course not found"
-        )
+    return {"status": "success", "message": "Academic history updated successfully"}
 
-    return course
 
-@app.get("/")
-def root():
-    return {"status": "running"}
+@app.delete("/api/v1/students/{student_id}/history")
+def delete_history(student_id: str):
+    student = get_student(student_id)
+    student["history"] = []
+    return {"status": "success"}
 
-@app.get("/debug")
-def debug():
+
+# ---------------------------
+# PLAN ENDPOINTS
+# ---------------------------
+
+@app.post("/api/v1/students/{student_id}/plan")
+def create_plan(student_id: str, payload: Plan):
+    student = get_student(student_id)
+    student["plan"] = [p.dict() for p in payload.planned_courses]
+
     return {
-        "stored_course_codes": list(courses.keys())
+        "status": "success",
+        "planned_courses_saved": len(payload.planned_courses)
+    }
+
+
+@app.put("/api/v1/students/{student_id}/plan")
+def replace_plan(student_id: str, payload: Plan):
+    return create_plan(student_id, payload)
+
+
+@app.delete("/api/v1/students/{student_id}/plan")
+def delete_plan(student_id: str):
+    student = get_student(student_id)
+    student["plan"] = []
+    return {"status": "success"}
+
+
+# ---------------------------
+# PROFILE ENDPOINT
+# ---------------------------
+
+@app.get("/api/v1/students/{student_id}/profile")
+def get_profile(student_id: str):
+    student = get_student(student_id)
+
+    return {
+        "student_id": student_id,
+        "history": student.get("history", []),
+        "plan": student.get("plan", [])
     }
