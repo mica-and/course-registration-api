@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Course Catalog</title>
+</head>
+<body>
+
+<h1>Course Catalog</h1>
+
+<p>
+This is a sample catalog for local testing only.<br>
+The auto-grader uses a different catalog with different course codes. Your HTML parser must be general — do not hardcode specific course codes or titles.
+</p>
+
+<table border="1">
+    <tr>
+        <th>Course Code</th>
+        <th>Title</th>
+        <th>Credits</th>
+        <th>Prerequisites</th>
+        <th>Cross-listed</th>
+    </tr>
+
+    <tr class="course">
+        <td class="course_code">COSC 1047</td>
+        <td class="course_title">Programming for Business</td>
+        <td class="credits">3</td>
+        <td class="prerequisites">None</td>
+        <td class="course-listed"></td>
+    </tr>
+
+    <tr class="course">
+        <td class="course_code">COSC 2006</td>
+        <td class="course_title">Programming Fundamentals I</td>
+        <td class="credits">3</td>
+        <td class="prerequisites">None</td>
+        <td class="course-listed"></td>
+    </tr>
+
+    <tr class="course">
+        <td class="course_code">COSC 2007</td>
+        <td class="course_title">Programming Fundamentals II</td>
+        <td class="credits">3</td>
+        <td class="prerequisites">COSC 2006</td>
+        <td class="course-listed"></td>
+    </tr>
+
+    <tr class="course">
+        <td class="course_code">COSC 3506</td>
+        <td class="course_title">Software Systems Development</td>
+        <td class="credits">3</td>
+        <td class="prerequisites">COSC 2007</td>
+        <td class="course-listed">ITEC 3506</td>
+    </tr>
+
+    <tr class="course">
+        <td class="course_code">ITEC 3506</td>
+        <td class="course_title">Software Systems Development</td>
+        <td class="credits">3</td>
+        <td class="prerequisites">COSC 2007</td>
+        <td class="course-listed">COSC 3506</td>
+    </tr>
+
+</table>
+
+<br>
+
+</body>
+</html>
